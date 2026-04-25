@@ -487,7 +487,8 @@ def is_acceptable_arabic_quiz_pair(question_ar: str, answer_ar: str) -> tuple[bo
     q_latin_ratio = latin_letter_ratio(q)
     a_latin_ratio = latin_letter_ratio(a)
     
-    if q_latin_ratio > 0.12:  # Max 12% Latin for questions (abbreviations, named entities OK).
+    # Tech and general trivia often retain short Latin tokens (USB, SQL, MP3) in otherwise Arabic text.
+    if q_latin_ratio > 0.18:
         return False, "question_has_too_much_latin"
     if a_latin_ratio > 0.35:  # Max 35% Latin for answers (brand tickers or acronyms allowed).
         return False, "answer_has_too_much_latin"

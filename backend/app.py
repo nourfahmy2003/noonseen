@@ -2,7 +2,7 @@
 
 from http.server import ThreadingHTTPServer
 
-from backend.config import HOST, PORT, PUBLIC_BASE_URL
+from backend.config import HOST, LIBRETRANSLATE_BASE_URL, PORT, PUBLIC_BASE_URL, TRANSLATION_PROVIDER
 from backend.routes.http_handler import SeenJeemHandler
 from backend.utilities.debug import debug_log
 from backend.utilities.network import detect_lan_ip
@@ -25,6 +25,11 @@ def run_server():
         print(f"Configured public base URL: {PUBLIC_BASE_URL}")
     elif lan_ip:
         print(f"Walla Kelma QR base will default to http://{lan_ip}:{PORT}")
+    print(
+        "Translation:",
+        f"provider={TRANSLATION_PROVIDER}",
+        "(LibreTranslate URL set)" if LIBRETRANSLATE_BASE_URL else "(LibreTranslate URL unset → Lingva for EN→AR when hybrid)",
+    )
     print("Runtime question preparation is live-source only. Local JSON banks are disabled.")
     print("IslamicQuizAPI now runs in-process inside the Seen Jeem backend.")
     print("Start the app with python3 server.py. Do not use python -m http.server for gameplay.")

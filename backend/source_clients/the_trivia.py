@@ -1,7 +1,8 @@
-"""Purpose: live general trivia — The Trivia API for معلومات عامة only; Open Trivia DB for تاريخ/تكنولوجيا/عالم الحيوان; LibreTranslate for Arabic."""
+"""Purpose: live general trivia — The Trivia API for معلومات عامة only; Open Trivia DB for تاريخ/تكنولوجيا/عالم الحيوان; LibreTranslate/Lingva for Arabic."""
 
 import html
 import secrets
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import unquote
 
 from backend.api_adapters.open_trivia import fetch_open_trivia_payload
@@ -15,6 +16,7 @@ from backend.services.trivia_quality import (
     content_substance_score,
     should_keep_for_category,
 )
+from backend.config import LIBRETRANSLATE_API_KEY, LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
 from backend.utilities.debug import debug_log, debug_preview
 from backend.utilities.ids import source_record_id, stable_hash
 
@@ -30,6 +32,42 @@ OPENTDB_CATEGORY_BY_BACKEND = {
 }
 
 SLOT_POINTS = {"easy": [200, 200], "medium": [400, 400], "hard": [600, 600]}
+
+
+def _lingva_primary_pool():
+    """True when most rows will hit Lingva (GET) — tune batch sizes and avoid parallel translation."""
+    if TRANSLATION_PROVIDER == "lingva":
+        return True
+    if TRANSLATION_PROVIDER == "libretranslate":
+        return False
+    if not LIBRETRANSLATE_BASE_URL:
+        return True
+    if "libretranslate.com" in LIBRETRANSLATE_BASE_URL.lower() and not (LIBRETRANSLATE_API_KEY or "").strip():
+        return True
+    return False
+
+
+def _parallel_map_normalized(raw_rows, normalize_fn, prefix, category):
+    """Normalize+translate rows. LibreTranslate uses a thread pool; Lingva is serialized globally."""
+    if not raw_rows:
+        return []
+    if _lingva_primary_pool():
+        out = []
+        for raw in raw_rows:
+            row = normalize_fn(prefix, category, raw)
+            if row:
+                out.append(row)
+        return out
+
+    max_workers = min(6, max(2, len(raw_rows)))
+    out = []
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {pool.submit(normalize_fn, prefix, category, raw): raw for raw in raw_rows}
+        for future in as_completed(future_map):
+            row = future.result()
+            if row:
+                out.append(row)
+    return out
 
 
 def _dedupe_translated_rows(rows):
@@ -177,26 +215,29 @@ def _collect_the_trivia_translated(category, cache):
     The Trivia API is used EXCLUSIVELY for معلومات عامة. We fetch medium/hard batches aggressively
     to avoid weak questions and ensure all difficulty slots are filled with quality content.
     """
+    lingva_primary = _lingva_primary_pool()
+    target = 48 if lingva_primary else 72
+    early_stop = 22 if lingva_primary else 9999
+    limits = (24, 32, 40) if lingva_primary else (50, 65, 80)
     collected = []
-    # Fetch more data per difficulty to account for aggressive filtering and quality scoring.
-    for difficulty in ("hard", "medium", "easy"):  # Fetch hard first to get better content.
-        for limit in (50, 65, 80):  # Progressive fetches if earlier batches don't yield enough.
-            if len(collected) >= 72:  # Early exit if we have enough for aggressive filtering.
+    for difficulty in ("hard", "medium", "easy"):
+        for limit in limits:
+            if len(collected) >= target:
                 break
             raw_rows = _fetch_the_trivia_pool(cache, THE_TRIVIA_GENERAL_TAGS, difficulty, limit)
-            for raw in raw_rows:
-                normalized = _normalize_the_trivia_row("thetrivia", category, raw)
-                if normalized:
-                    collected.append(normalized)
-        if len(collected) >= 72:
+            collected.extend(_parallel_map_normalized(raw_rows, _normalize_the_trivia_row, "thetrivia", category))
+            if len(_dedupe_translated_rows(collected)) >= early_stop:
+                break
+        if len(collected) >= target or len(_dedupe_translated_rows(collected)) >= early_stop:
             break
-    
+
+    deduped = _dedupe_translated_rows(collected)
     debug_log(
         "FINAL",
         "The Trivia collection stats for معلومات عامة",
-        {"total_collected": len(collected), "target": 72, "after_dedup": len(_dedupe_translated_rows(collected))},
+        {"total_collected": len(collected), "target": target, "after_dedup": len(deduped)},
     )
-    return _dedupe_translated_rows(collected)
+    return deduped
 
 
 def _collect_opentdb_translated(category, _cache):
@@ -206,27 +247,32 @@ def _collect_opentdb_translated(category, _cache):
     We fetch many batches to ensure that after translation and quality validation,
     we have enough high-substance rows to fill all difficulty slots properly.
     """
+    lingva_primary = _lingva_primary_pool()
+    # Lingva is slow and rate-limited: smaller OpenTrivia pages + stop as soon as the pool is viable.
+    rounds = 8 if lingva_primary else 8
+    amounts = (16, 20) if lingva_primary else (50, 60)
+    cap = 120 if lingva_primary else 96
+    early_stop = 22 if lingva_primary else 9999
+
     cat_id = OPENTDB_CATEGORY_BY_BACKEND[category]
     collected = []
-    
-    # Run multiple rounds fetching significant batches per round to build a large pool.
-    for _round in range(8):  # Increased rounds for better quality filtering.
-        for amount in (50, 60):  # Larger batch sizes.
+
+    for _round in range(rounds):
+        for amount in amounts:
             raw_rows = _fetch_opentdb_pool(cat_id, amount, difficulty=None)
-            for raw in raw_rows:
-                normalized = _normalize_opentdb_row("opentdb", category, raw)
-                if normalized:
-                    collected.append(normalized)
-        # Early exit if we have enough for aggressive filtering.
-        if len(collected) >= 96:
+            collected.extend(_parallel_map_normalized(raw_rows, _normalize_opentdb_row, "opentdb", category))
+            if len(_dedupe_translated_rows(collected)) >= early_stop:
+                break
+        if len(collected) >= cap or len(_dedupe_translated_rows(collected)) >= early_stop:
             break
-    
+
+    deduped = _dedupe_translated_rows(collected)
     debug_log(
         "FINAL",
         f"Open Trivia collection stats for {category}",
-        {"total_collected": len(collected), "target": 96, "after_dedup": len(_dedupe_translated_rows(collected))},
+        {"total_collected": len(collected), "target": cap, "after_dedup": len(deduped)},
     )
-    return _dedupe_translated_rows(collected)
+    return deduped
 
 
 def _bucketize(records):
@@ -270,7 +316,11 @@ def fetch_questions(selection, source_definition, cache):
         raise ValueError(f"No live trivia routing configured for {category}")
 
     if len(records) < 6:
-        raise ValueError(f"Not enough translated trivia rows for {category}")
+        raise ValueError(
+            f"Not enough translated trivia rows for {category} (have {len(records)}, need 6). "
+            "Configure LIBRETRANSLATE_BASE_URL + LIBRETRANSLATE_API_KEY for reliable translation, "
+            "or use TRANSLATION_PROVIDER=hybrid without a LibreTranslate URL (Lingva; may rate-limit)."
+        )
 
     pools = _bucketize(records)
     prepared = []

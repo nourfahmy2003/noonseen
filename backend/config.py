@@ -9,11 +9,16 @@ PORT = int(os.environ.get("SEENJEEM_PORT", "8000"))
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Translation: LibreTranslate is required for general-style quiz text (no heuristic fallback).
-TRANSLATION_PROVIDER = os.environ.get("TRANSLATION_PROVIDER", "libretranslate").strip().lower()
-# Example host only: https://libretranslate.com — the adapter appends `/translate` itself.
-LIBRETRANSLATE_BASE_URL = os.environ.get("LIBRETRANSLATE_BASE_URL", "").strip().rstrip("/")
+# Translation: default hybrid = LibreTranslate when configured, else Lingva public API (no API key).
+# Set TRANSLATION_PROVIDER=libretranslate to require LibreTranslate only (no Lingva fallback).
+TRANSLATION_PROVIDER = os.environ.get("TRANSLATION_PROVIDER", "hybrid").strip().lower()
+# Default public instance (requires LIBRETRANSLATE_API_KEY for most traffic). Override with your own host.
+# Set LIBRETRANSLATE_BASE_URL= to disable and use Lingva-only in hybrid mode.
+_LIBRETRANSLATE_DEFAULT = "https://libretranslate.com"
+LIBRETRANSLATE_BASE_URL = os.environ.get("LIBRETRANSLATE_BASE_URL", _LIBRETRANSLATE_DEFAULT).strip().rstrip("/")
 LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "").strip()
+# Lingva instance for hybrid / lingva-only modes (GET; length limits apply).
+LINGVA_BASE_URL = os.environ.get("LINGVA_BASE_URL", "https://lingva.ml").strip().rstrip("/")
 
 # Live source endpoints used at runtime. Islamic categories now run from the
 # same backend process through an in-process provider instead of a second server.

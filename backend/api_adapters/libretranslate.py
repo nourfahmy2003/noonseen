@@ -40,6 +40,14 @@ def libretranslate_text(*, text: str, source_lang: str = "en", target_lang: str 
     )
 
     response = fetch_json_post(url, payload, max_attempts=2, retry_backoff_seconds=(0.75,), retry_on_statuses={429})
+    if isinstance(response, dict) and response.get("error"):
+        err = str(response.get("error") or "unknown error")
+        debug_log("TRANSLATION", "LibreTranslate API error field", {"error": err[:200]})
+        raise ValueError(
+            f"LibreTranslate error: {err}. "
+            "Hosted libretranslate.com often requires LIBRETRANSLATE_API_KEY from https://portal.libretranslate.com "
+            "or use default TRANSLATION_PROVIDER=hybrid (Lingva fallback)."
+        )
     translated = response.get("translatedText") if isinstance(response, dict) else None
     if not isinstance(translated, str) or not translated.strip():
         debug_log("TRANSLATION", "LibreTranslate rejected: bad response shape", debug_preview(response, limit=2))

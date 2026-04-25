@@ -131,7 +131,7 @@ def prepare_match_question_bank(selected_items):
                     "backendCategory": selection["backend_category"],
                     "sourceMode": "api",
                     "questionCount": len(category["questions"]),
-                    "source": resolved_source["source"],
+                    "source": category.get("resolvedSource") or resolved_source["source"],
                     "sourceType": resolved_source["source_type"],
                 }
             )

@@ -1,34 +1,59 @@
-"""Purpose: route all English→Arabic quiz wording through LibreTranslate with strict validation (live-only)."""
+"""Purpose: English→Arabic for quiz and brands: LibreTranslate (POST) and/or Lingva (GET), with strict Arabic validation."""
 
 from backend.api_adapters.libretranslate import libretranslate_text
+from backend.api_adapters.lingva_translate import lingva_translate_text
 from backend.arabic.transform import (
     is_acceptable_arabic_brand_answer,
     is_acceptable_arabic_quiz_pair,
     normalize_arabic_text,
 )
-from backend.config import TRANSLATION_PROVIDER
+from backend.config import LIBRETRANSLATE_API_KEY, LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
 from backend.utilities.debug import debug_log
 
 
-def _require_libretranslate_provider():
-    if TRANSLATION_PROVIDER != "libretranslate":
-        raise ValueError(
-            f'Unsupported TRANSLATION_PROVIDER "{TRANSLATION_PROVIDER}". '
-            "Only libretranslate is supported for general quiz translation."
+def _hybrid_use_lingva_only() -> bool:
+    """Avoid a doomed LibreTranslate POST when the public host will reject requests without an API key."""
+    if not LIBRETRANSLATE_BASE_URL:
+        return True
+    if "libretranslate.com" in LIBRETRANSLATE_BASE_URL.lower() and not (LIBRETRANSLATE_API_KEY or "").strip():
+        return True
+    return False
+
+
+def _translate_en_to_ar_line(*, text: str, source_lang: str = "en", target_lang: str = "ar") -> str:
+    """Route one English string to Arabic using TRANSLATION_PROVIDER.
+
+    hybrid (default): LibreTranslate when configured for success; otherwise Lingva first, then LT on failure.
+
+    libretranslate: LibreTranslate only (raises if URL missing or API errors).
+
+    lingva: Lingva only.
+    """
+    mode = TRANSLATION_PROVIDER
+    if mode == "lingva":
+        return lingva_translate_text(text=text, source_lang=source_lang, target_lang=target_lang)
+
+    if mode == "libretranslate":
+        return libretranslate_text(text=text, source_lang=source_lang, target_lang=target_lang)
+
+    # hybrid (and unknown values): prefer Lingva when LibreTranslate is not credentialed for the chosen host.
+    if _hybrid_use_lingva_only():
+        debug_log("TRANSLATION", "Hybrid mode: using Lingva (LibreTranslate URL unset or needs API key)", {})
+        return lingva_translate_text(text=text, source_lang=source_lang, target_lang=target_lang)
+
+    try:
+        return libretranslate_text(text=text, source_lang=source_lang, target_lang=target_lang)
+    except ValueError as error:
+        debug_log(
+            "TRANSLATION",
+            "LibreTranslate failed; falling back to Lingva",
+            {"error": str(error)[:220]},
         )
+        return lingva_translate_text(text=text, source_lang=source_lang, target_lang=target_lang)
 
 
 def translate_quiz_pair(*, question_en: str, answer_en: str) -> tuple[str, str]:
-    """Translate question+answer; returns Arabic strings or raises (no local heuristic fallback).
-    
-    Process:
-    1. Fetch source question and answer in English
-    2. Translate both via LibreTranslate
-    3. Normalize Arabic text
-    4. Validate that the Arabic is understandable and natural
-    5. Discard and fail if translation is poor (no local fallback)
-    """
-    _require_libretranslate_provider()
+    """Translate question+answer; returns Arabic strings or raises (no local heuristic fallback)."""
     raw_q = str(question_en or "").strip()
     raw_a = str(answer_en or "").strip()
     if not raw_q or not raw_a:
@@ -36,18 +61,18 @@ def translate_quiz_pair(*, question_en: str, answer_en: str) -> tuple[str, str]:
 
     debug_log("TRANSLATION", "Raw source question (English)", {"preview": raw_q[:240]})
     debug_log("TRANSLATION", "Raw source answer (English)", {"preview": raw_a[:120]})
-    
+
     try:
-        question_ar = normalize_arabic_text(libretranslate_text(text=raw_q, source_lang="en", target_lang="ar"))
+        question_ar = normalize_arabic_text(_translate_en_to_ar_line(text=raw_q, source_lang="en", target_lang="ar"))
     except Exception as error:
-        debug_log("REJECTED", "Question translation failed via LibreTranslate", {"error": str(error)})
-        raise ValueError(f"Question translation failed: {error}")
-        
+        debug_log("REJECTED", "Question translation failed", {"error": str(error)})
+        raise ValueError(f"Question translation failed: {error}") from error
+
     try:
-        answer_ar = normalize_arabic_text(libretranslate_text(text=raw_a, source_lang="en", target_lang="ar"))
+        answer_ar = normalize_arabic_text(_translate_en_to_ar_line(text=raw_a, source_lang="en", target_lang="ar"))
     except Exception as error:
-        debug_log("REJECTED", "Answer translation failed via LibreTranslate", {"error": str(error)})
-        raise ValueError(f"Answer translation failed: {error}")
+        debug_log("REJECTED", "Answer translation failed", {"error": str(error)})
+        raise ValueError(f"Answer translation failed: {error}") from error
 
     debug_log(
         "TRANSLATION",
@@ -64,7 +89,7 @@ def translate_quiz_pair(*, question_en: str, answer_en: str) -> tuple[str, str]:
     if not ok:
         debug_log(
             "REJECTED",
-            "Arabic validation failed after LibreTranslate",
+            "Arabic validation failed after machine translation",
             {
                 "reason": reason,
                 "question_ar": question_ar[:200],
@@ -87,36 +112,26 @@ def translate_quiz_pair(*, question_en: str, answer_en: str) -> tuple[str, str]:
 
 
 def translate_brand_answer_ar(*, company_name_en: str) -> str:
-    """Purpose: turn a live company name into short natural Arabic for logo reveal answers.
-    
-    Process:
-    1. Take the company name from API
-    2. Send to LibreTranslate with a hint that it's a brand/company name
-    3. Normalize the Arabic
-    4. Validate that the output is natural and brief
-    5. Fail clearly if translation is poor (no local fallback)
-    """
-    _require_libretranslate_provider()
+    """Turn a live company name into short natural Arabic for logo reveal answers."""
     raw = str(company_name_en or "").strip()
     if not raw:
         raise ValueError("translate_brand_answer_ar requires a company name.")
-    
+
     debug_log("TRANSLATION", "Brand name (English)", {"brand_name": raw})
-    
-    # Add context to LibreTranslate to get better brand name translations.
+
     prompt = f"{raw} (brand or company name, translate to Arabic only, no explanation or extra text)"
     try:
-        answer_ar = normalize_arabic_text(libretranslate_text(text=prompt, source_lang="en", target_lang="ar"))
+        answer_ar = normalize_arabic_text(_translate_en_to_ar_line(text=prompt, source_lang="en", target_lang="ar"))
     except Exception as error:
-        debug_log("REJECTED", "Brand translation failed via LibreTranslate", {"error": str(error), "brand": raw})
-        raise ValueError(f"Brand translation failed: {error}")
-    
+        debug_log("REJECTED", "Brand translation failed", {"error": str(error), "brand": raw})
+        raise ValueError(f"Brand translation failed: {error}") from error
+
     debug_log(
         "TRANSLATION",
         "Brand translation result",
         {"source_brand": raw, "result_ar": answer_ar[:120], "char_count": len(answer_ar)},
     )
-    
+
     ok, reason = is_acceptable_arabic_brand_answer(answer_ar)
     if not ok:
         debug_log(
@@ -125,7 +140,7 @@ def translate_brand_answer_ar(*, company_name_en: str) -> str:
             {"reason": reason, "brand": raw, "result_ar": answer_ar[:120]},
         )
         raise ValueError(f"Brand Arabic translation failed validation: {reason}")
-    
+
     debug_log(
         "FINAL",
         "Brand translation succeeded",
