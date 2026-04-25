@@ -4,16 +4,47 @@ import os
 from pathlib import Path
 
 
+def _load_local_env_file():
+    """Load project-root .env into the process environment (does not override existing exports)."""
+    root = Path(__file__).resolve().parent.parent
+    path = root / ".env"
+    if not path.is_file():
+        return
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if key not in os.environ:
+            os.environ[key] = val
+
+
+_load_local_env_file()
+
 HOST = os.environ.get("SEENJEEM_HOST", "0.0.0.0")
 PORT = int(os.environ.get("SEENJEEM_PORT", "8000"))
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Translation: default hybrid = LibreTranslate when configured, else Lingva public API (no API key).
+# Translation: default hybrid = LibreTranslate first when URL is set; Lingva on failure (e.g. rate limits).
 # Set TRANSLATION_PROVIDER=libretranslate to require LibreTranslate only (no Lingva fallback).
 TRANSLATION_PROVIDER = os.environ.get("TRANSLATION_PROVIDER", "hybrid").strip().lower()
-# Default public instance (requires LIBRETRANSLATE_API_KEY for most traffic). Override with your own host.
-# Set LIBRETRANSLATE_BASE_URL= to disable and use Lingva-only in hybrid mode.
+# Default public instance. LIBRETRANSLATE_API_KEY is optional (omit unless your host requires it).
+# Set LIBRETRANSLATE_BASE_URL= in .env to force Lingva-only in hybrid mode.
 _LIBRETRANSLATE_DEFAULT = "https://libretranslate.com"
 LIBRETRANSLATE_BASE_URL = os.environ.get("LIBRETRANSLATE_BASE_URL", _LIBRETRANSLATE_DEFAULT).strip().rstrip("/")
 LIBRETRANSLATE_API_KEY = os.environ.get("LIBRETRANSLATE_API_KEY", "").strip()
@@ -40,7 +71,7 @@ API_COUNTRIES_API_BASE = os.environ.get("API_COUNTRIES_API_BASE", "https://www.a
 KALIMALAB_API_TOKEN = os.environ.get("KALIMALAB_API_KEY") or os.environ.get("KALIMALAB_TOKEN")
 TMDB_BEARER_TOKEN = os.environ.get("TMDB_BEARER_TOKEN") or os.environ.get("TMDB_API_TOKEN")
 API_FOOTBALL_API_KEY = os.environ.get("API_FOOTBALL_API_KEY")
-# API Ninjas key must be supplied via environment (never commit real keys into the repo).
+# Logos: set API_NINJAS_API_KEY in the environment or in project-root .env (see .env.example).
 API_NINJAS_API_KEY = os.environ.get("API_NINJAS_API_KEY", "").strip()
 AUDIO_DB_API_KEY = os.environ.get("AUDIODB_API_KEY", "2")
 WALLA_KELMA_SESSION_TTL_SECONDS = int(os.environ.get("WALLA_KELMA_SESSION_TTL_SECONDS", "900"))

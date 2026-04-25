@@ -7,23 +7,15 @@ from backend.arabic.transform import (
     is_acceptable_arabic_quiz_pair,
     normalize_arabic_text,
 )
-from backend.config import LIBRETRANSLATE_API_KEY, LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
+from backend.config import LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
 from backend.utilities.debug import debug_log
-
-
-def _hybrid_use_lingva_only() -> bool:
-    """Avoid a doomed LibreTranslate POST when the public host will reject requests without an API key."""
-    if not LIBRETRANSLATE_BASE_URL:
-        return True
-    if "libretranslate.com" in LIBRETRANSLATE_BASE_URL.lower() and not (LIBRETRANSLATE_API_KEY or "").strip():
-        return True
-    return False
 
 
 def _translate_en_to_ar_line(*, text: str, source_lang: str = "en", target_lang: str = "ar") -> str:
     """Route one English string to Arabic using TRANSLATION_PROVIDER.
 
-    hybrid (default): LibreTranslate when configured for success; otherwise Lingva first, then LT on failure.
+    hybrid (default): LibreTranslate when LIBRETRANSLATE_BASE_URL is set; on failure (rate limits, etc.) use Lingva.
+    If the base URL is empty, use Lingva only.
 
     libretranslate: LibreTranslate only (raises if URL missing or API errors).
 
@@ -36,9 +28,8 @@ def _translate_en_to_ar_line(*, text: str, source_lang: str = "en", target_lang:
     if mode == "libretranslate":
         return libretranslate_text(text=text, source_lang=source_lang, target_lang=target_lang)
 
-    # hybrid (and unknown values): prefer Lingva when LibreTranslate is not credentialed for the chosen host.
-    if _hybrid_use_lingva_only():
-        debug_log("TRANSLATION", "Hybrid mode: using Lingva (LibreTranslate URL unset or needs API key)", {})
+    if not LIBRETRANSLATE_BASE_URL:
+        debug_log("TRANSLATION", "Hybrid mode: no LibreTranslate URL; using Lingva", {})
         return lingva_translate_text(text=text, source_lang=source_lang, target_lang=target_lang)
 
     try:

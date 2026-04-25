@@ -45,8 +45,8 @@ def libretranslate_text(*, text: str, source_lang: str = "en", target_lang: str 
         debug_log("TRANSLATION", "LibreTranslate API error field", {"error": err[:200]})
         raise ValueError(
             f"LibreTranslate error: {err}. "
-            "Hosted libretranslate.com often requires LIBRETRANSLATE_API_KEY from https://portal.libretranslate.com "
-            "or use default TRANSLATION_PROVIDER=hybrid (Lingva fallback)."
+            "Often this is rate limiting; retry later. If the server asks for a key, set LIBRETRANSLATE_API_KEY "
+            "(optional for many self-hosted instances). Hybrid mode will fall back to Lingva when caught upstream."
         )
     translated = response.get("translatedText") if isinstance(response, dict) else None
     if not isinstance(translated, str) or not translated.strip():

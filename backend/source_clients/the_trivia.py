@@ -16,7 +16,7 @@ from backend.services.trivia_quality import (
     content_substance_score,
     should_keep_for_category,
 )
-from backend.config import LIBRETRANSLATE_API_KEY, LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
+from backend.config import LIBRETRANSLATE_BASE_URL, TRANSLATION_PROVIDER
 from backend.utilities.debug import debug_log, debug_preview
 from backend.utilities.ids import source_record_id, stable_hash
 
@@ -40,11 +40,7 @@ def _lingva_primary_pool():
         return True
     if TRANSLATION_PROVIDER == "libretranslate":
         return False
-    if not LIBRETRANSLATE_BASE_URL:
-        return True
-    if "libretranslate.com" in LIBRETRANSLATE_BASE_URL.lower() and not (LIBRETRANSLATE_API_KEY or "").strip():
-        return True
-    return False
+    return not LIBRETRANSLATE_BASE_URL
 
 
 def _parallel_map_normalized(raw_rows, normalize_fn, prefix, category):
